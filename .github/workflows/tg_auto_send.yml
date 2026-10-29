@@ -1,0 +1,62 @@
+name: Telegram Auto Water & Signin
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '执行模式: wait (按时间表精准倒计时连续跑) / now (立即发一轮)'
+        required: false
+        default: 'wait'
+
+  push:
+    branches:
+      - main
+    paths:
+      - 'config.enc'
+      - 'cloud_runner.py'
+      - 'messages_pool.py'
+      - '.github/workflows/tg_auto_send.yml'
+
+  schedule:
+    - cron: '15 23 * * *'  # 早间预唤醒1 (北京时间 07:15 进场，5.4h驻留直达 12:00 首轮)
+    - cron: '30 0 * * *'   # 早间预唤醒2 (北京时间 08:30 双保险进场，防 GitHub 漏触发)
+    - cron: '45 1 * * *'   # 早间预唤醒3 (北京时间 09:45 三保险进场，防 GitHub 延迟)
+    - cron: '0 3 * * *'    # 早间预唤醒4 (北京时间 11:00 四保险进场，确保 12:00 100% 准时)
+    - cron: '20 4 * * *'   # 午间预唤醒1 (北京时间 12:20 排队接力下午场)
+    - cron: '50 5 * * *'   # 午间预唤醒2 (北京时间 13:50 排队接力下午场)
+    - cron: '20 7 * * *'   # 午间预唤醒3 (北京时间 15:20 排队接力下午场)
+    - cron: '50 8 * * *'   # 晚间预唤醒1 (北京时间 16:50 排队接力晚间场)
+    - cron: '20 10 * * *'  # 晚间预唤醒2 (北京时间 18:20 排队接力晚间场)
+    - cron: '50 11 * * *'  # 晚间预唤醒3 (北京时间 19:50 兜底接力至 22:50 结束)
+
+concurrency:
+  group: tg-userbot-runner
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+jobs:
+  send-messages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: 📥 检出代码仓库
+        uses: actions/checkout@v4
+
+      - name: 🐍 配置 Python 3.12 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: 📦 安装依赖库
+        run: |
+          pip install telethon pysocks python-socks cryptography
+
+      - name: 🚀 启动加密多轮精准时钟引擎 (纯内存解密与无痕脱敏模式)
+        env:
+          CONFIG_SECRET_KEY: ${{ secrets.CONFIG_SECRET_KEY }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+          INPUT_MODE: ${{ github.event.inputs.mode }}
+        run: |
+          python cloud_runner.py

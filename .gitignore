@@ -1,0 +1,18 @@
+# 本地明文配置与加密主密钥（严禁提交到公开仓库，仅上传加密后的 config.enc）
+config.py
+.secret_key
+*.session
+*.session-journal
+.env
+.env.example
+schedules.json
+logs/
+__pycache__/
+*.pyc
+
+# 本地辅助脚本（无需上传至云端公开仓库）
+bot.py
+panel.html
+export_session.py
+list_groups.py
+requirements.txt
