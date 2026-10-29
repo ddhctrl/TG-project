@@ -149,53 +149,36 @@ def classify_tg_error(err: Exception) -> str:
 
 def sync_schedule_to_github_yml():
     """
-    加密本地 config.py -> config.enc，并生成高频多锚点预唤醒 GitHub Actions 配置（全加密无痕版）
+    加密本地 config.py -> config.enc，并生成高精度 Webhook 唤醒专属轻量 GitHub Actions 配置：
+    - 由外部高精度定时器通过 repository_dispatch 秒级拉起
+    - 容器即发即走，每次只运行 2-3 分钟，彻底告别挂机空转！
     """
     encrypt_local_config_to_enc()
     rounds = list(getattr(config, "DAILY_WATER_ROUNDS", getattr(config, "SCHEDULE_BEIJING_TIMES", ["12:00"])))
-    cron_lines = [
-        "    - cron: '15 23 * * *'  # 早间预唤醒1 (北京时间 07:15 进场，5.4h驻留直达 12:00 首轮)",
-        "    - cron: '30 0 * * *'   # 早间预唤醒2 (北京时间 08:30 双保险进场，防 GitHub 漏触发)",
-        "    - cron: '45 1 * * *'   # 早间预唤醒3 (北京时间 09:45 三保险进场，防 GitHub 延迟)",
-        "    - cron: '0 3 * * *'    # 早间预唤醒4 (北京时间 11:00 四保险进场，确保 12:00 100% 准时)",
-        "    - cron: '20 4 * * *'   # 午间预唤醒1 (北京时间 12:20 排队接力下午场)",
-        "    - cron: '50 5 * * *'   # 午间预唤醒2 (北京时间 13:50 排队接力下午场)",
-        "    - cron: '20 7 * * *'   # 午间预唤醒3 (北京时间 15:20 排队接力下午场)",
-        "    - cron: '50 8 * * *'   # 晚间预唤醒1 (北京时间 16:50 排队接力晚间场)",
-        "    - cron: '20 10 * * *'  # 晚间预唤醒2 (北京时间 18:20 排队接力晚间场)",
-        "    - cron: '50 11 * * *'  # 晚间预唤醒3 (北京时间 19:50 兜底接力至 22:50 结束)",
-    ]
 
     yml_content = f"""name: Telegram Auto Water & Signin
 
 on:
+  # 1. 外部高精度秒级准点 Webhook 唤醒 (cron-job.org / Cloudflare 等)
+  repository_dispatch:
+    types: [run-water-round]
+
+  # 2. 支持在 GitHub Actions 页面随时手动点击 "Run workflow" 测试
   workflow_dispatch:
     inputs:
       mode:
-        description: '执行模式: wait (按时间表精准倒计时连续跑) / now (立即发一轮)'
+        description: '执行模式: now (立即执行当轮并退场)'
         required: false
-        default: 'wait'
-
-  push:
-    branches:
-      - main
-    paths:
-      - 'config.enc'
-      - 'cloud_runner.py'
-      - 'messages_pool.py'
-      - '.github/workflows/tg_auto_send.yml'
-
-  schedule:
-{chr(10).join(cron_lines)}
+        default: 'now'
 
 concurrency:
   group: tg-userbot-runner
-  cancel-in-progress: ${{{{ github.event_name != 'schedule' }}}}
+  cancel-in-progress: false
 
 jobs:
   send-messages:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 15
 
     steps:
       - name: 📥 检出代码仓库
@@ -211,19 +194,18 @@ jobs:
         run: |
           pip install telethon pysocks python-socks cryptography
 
-      - name: 🚀 启动加密多轮精准时钟引擎 (纯内存解密与无痕脱敏模式)
+      - name: 🚀 执行当轮任务 (即发即走，约2分钟完成退出)
         env:
           CONFIG_SECRET_KEY: ${{{{ secrets.CONFIG_SECRET_KEY }}}}
           GITHUB_EVENT_NAME: ${{{{ github.event_name }}}}
-          GITHUB_EVENT_SCHEDULE: ${{{{ github.event.schedule }}}}
-          INPUT_MODE: ${{{{ github.event.inputs.mode }}}}
+          INPUT_MODE: now
         run: |
-          python cloud_runner.py
+          python cloud_runner.py --now
 """
     os.makedirs(os.path.dirname(WORKFLOW_YML_PATH), exist_ok=True)
     with open(WORKFLOW_YML_PATH, "w", encoding="utf-8", newline="\n") as f:
         f.write(yml_content)
-    log_info(f"🔒 已将 config.py 加密为 config.enc，并同步 {len(rounds)} 轮防漏预唤醒配置至 GitHub")
+    log_info(f"🔒 已将 config.py 加密为 config.enc，并同步极速即发即走 Webhook 工作流至 GitHub")
 
 
 def get_upcoming_rounds(executed_today: set[str]) -> list[tuple[int, str, list, datetime]]:
@@ -712,13 +694,36 @@ async def main():
     total_rounds = len(rounds)
     all_fallback: list = getattr(config, "TARGET_GROUP_IDS", [])
 
-    # 如果通过命令行传入 --now 或手动选择 now 模式，则立即执行当前最近的一轮并退出
-    input_mode = os.getenv("INPUT_MODE", "wait").strip().lower()
-    if "--now" in sys.argv or input_mode == "now":
-        upcoming = get_upcoming_rounds(set())
-        r_idx, r_key, r_groups, _ = upcoming[0] if upcoming else (0, rounds[0], all_fallback, datetime.now(BJ_TZ))
-        log_info(f"⚡ [立即执行模式] 正在立即执行第 {r_idx + 1}/{total_rounds} 轮 [{r_key}]...")
+    # 如果通过命令行传入 --now、输入 now 模式，或由外部 Webhook (repository_dispatch) 唤醒，则立即执行当轮并退出
+    event_name = os.getenv("GITHUB_EVENT_NAME", "").strip().lower()
+    input_mode = os.getenv("INPUT_MODE", "").strip().lower()
+    is_instant_run = ("--now" in sys.argv) or (input_mode == "now") or (event_name == "repository_dispatch")
+
+    if is_instant_run:
+        now_bj = datetime.now(BJ_TZ)
+        batches: dict = getattr(config, "SCHEDULE_BATCHES", {})
+        # 寻找距离当前北京时间最近的目标轮次 (例如 12:00 Webhook 唤醒时自动精确对齐 12:00 轮)
+        best_match = None
+        min_diff = 999999.0
+        for idx, t_str in enumerate(rounds):
+            parts = str(t_str).strip().split(":")
+            if len(parts) >= 2:
+                h, m = int(parts[0]), int(parts[1])
+                t_dt = now_bj.replace(hour=h, minute=m, second=0, microsecond=0)
+                diff = abs((t_dt - now_bj).total_seconds())
+                if diff < min_diff:
+                    min_diff = diff
+                    best_match = (idx, t_str, batches.get(t_str, all_fallback), t_dt)
+
+        if best_match and min_diff <= 3600:
+            r_idx, r_key, r_groups, _ = best_match
+        else:
+            upcoming = get_upcoming_rounds(set())
+            r_idx, r_key, r_groups, _ = upcoming[0] if upcoming else (0, rounds[0], all_fallback, now_bj)
+
+        log_info(f"⚡ [极速执行模式] 正在执行第 {r_idx + 1}/{total_rounds} 轮 [{r_key}] (执行完毕后立即退场)...")
         await execute_one_round(r_idx, r_key, r_groups, total_rounds)
+        log_info(f"🏁 [极速执行完成] 本轮任务已安全完成，容器退出！")
         return
 
     # 连续多轮精准时钟驻留引擎：

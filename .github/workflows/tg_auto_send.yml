@@ -1,42 +1,26 @@
 name: Telegram Auto Water & Signin
 
 on:
+  # 1. 外部高精度秒级准点 Webhook 唤醒 (cron-job.org / Cloudflare 等)
+  repository_dispatch:
+    types: [run-water-round]
+
+  # 2. 支持在 GitHub Actions 页面随时手动点击 "Run workflow" 测试
   workflow_dispatch:
     inputs:
       mode:
-        description: '执行模式: wait (按时间表精准倒计时连续跑) / now (立即发一轮)'
+        description: '执行模式: now (立即执行当轮并退场)'
         required: false
-        default: 'wait'
-
-  push:
-    branches:
-      - main
-    paths:
-      - 'config.enc'
-      - 'cloud_runner.py'
-      - 'messages_pool.py'
-      - '.github/workflows/tg_auto_send.yml'
-
-  schedule:
-    - cron: '15 23 * * *'  # 早间预唤醒1 (北京时间 07:15 进场，5.4h驻留直达 12:00 首轮)
-    - cron: '30 0 * * *'   # 早间预唤醒2 (北京时间 08:30 双保险进场，防 GitHub 漏触发)
-    - cron: '45 1 * * *'   # 早间预唤醒3 (北京时间 09:45 三保险进场，防 GitHub 延迟)
-    - cron: '0 3 * * *'    # 早间预唤醒4 (北京时间 11:00 四保险进场，确保 12:00 100% 准时)
-    - cron: '20 4 * * *'   # 午间预唤醒1 (北京时间 12:20 排队接力下午场)
-    - cron: '50 5 * * *'   # 午间预唤醒2 (北京时间 13:50 排队接力下午场)
-    - cron: '20 7 * * *'   # 午间预唤醒3 (北京时间 15:20 排队接力下午场)
-    - cron: '50 8 * * *'   # 晚间预唤醒1 (北京时间 16:50 排队接力晚间场)
-    - cron: '20 10 * * *'  # 晚间预唤醒2 (北京时间 18:20 排队接力晚间场)
-    - cron: '50 11 * * *'  # 晚间预唤醒3 (北京时间 19:50 兜底接力至 22:50 结束)
+        default: 'now'
 
 concurrency:
   group: tg-userbot-runner
-  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+  cancel-in-progress: false
 
 jobs:
   send-messages:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 15
 
     steps:
       - name: 📥 检出代码仓库
@@ -52,11 +36,10 @@ jobs:
         run: |
           pip install telethon pysocks python-socks cryptography
 
-      - name: 🚀 启动加密多轮精准时钟引擎 (纯内存解密与无痕脱敏模式)
+      - name: 🚀 执行当轮任务 (即发即走，约2分钟完成退出)
         env:
           CONFIG_SECRET_KEY: ${{ secrets.CONFIG_SECRET_KEY }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
-          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
-          INPUT_MODE: ${{ github.event.inputs.mode }}
+          INPUT_MODE: now
         run: |
-          python cloud_runner.py
+          python cloud_runner.py --now
