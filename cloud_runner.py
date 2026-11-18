@@ -594,6 +594,7 @@ async def execute_one_round(
         return
 
     # 严格拆分【独立签到轮】与【单条水群轮】，确保任何一轮在任何群都只发 1 条消息！
+    enable_water = bool(getattr(config, "ENABLE_WATER_CHAT", True))
     if not already_signed:
         is_signin_round = True
         water_slot_index = 0
@@ -603,6 +604,11 @@ async def execute_one_round(
             f"本轮仅执行【全群每日签到 (每群严格只发 1 条 '签到'，不发水群)】，覆盖全部 {len(effective_targets)} 个群！"
         )
     else:
+        if not enable_water:
+            log_info("⏸️ [仅签到模式] 当前已关闭水群 (ENABLE_WATER_CHAT = False)，且今日全群已完成签到，本次自动跳过不发任何消息！")
+            await client.disconnect()
+            return
+
         if water_sent_today >= 10 and not is_manual_now:
             log_info(f"🎉 [今日配额已满] 今日已完成签到且已累计发送 {water_sent_today}/10 条水群消息，本轮无需再发！")
             await client.disconnect()
